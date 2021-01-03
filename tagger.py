@@ -141,9 +141,9 @@ def get_word_features_weight(word, current_tag, prev_tag):
     if word.isupper():
         word_all_capital_weight = max(all_capital[current_tag], word_all_capital_weight)
     else:
-        if word[0].isupper() and prev_tag!= START:
+        if word[0].isupper() and prev_tag != START:
             word_start_with_capital_weight = max(start_with_capital[current_tag], word_start_with_capital_weight)
-    return word_suffix_weight+word_start_with_capital_weight+word_all_capital_weight
+    return word_suffix_weight + word_start_with_capital_weight + word_all_capital_weight
 
 
 def get_value_from_emmission(emmission_count, current_tag, word, prev_tag=None):
@@ -164,7 +164,7 @@ def get_value_from_emmission(emmission_count, current_tag, word, prev_tag=None):
     ptw_backof = ((all_words_count[word] + 1) / (sum(all_words_count.values()) + len(perWordTagCounts)))
     singelton_count = 1 + singelton_tw[current_tag]
     value = log(((emmission_count + ptw_backof * singelton_count * word_features_weight) / (
-                allTagCounts[current_tag] + singelton_count)))
+            allTagCounts[current_tag] + singelton_count)))
     return value
 
 
@@ -208,7 +208,7 @@ def learn_params(tagged_sentences):
             update_dic_counter(perWordTagCounts, current_word, current_tag)
             update_dic_counter(transitionCounts, previous_tag, current_tag)
             update_dic_counter(emissionCounts, current_tag, current_word)
-            #  count word suffix
+            #  count word suffix for emission probs
             for suffix in suffix_list:
                 if current_word[0].endswith(suffix):
                     suffixes[suffix].update(current_tag)
@@ -239,7 +239,7 @@ def learn_params(tagged_sentences):
 
     return [allTagCounts, perWordTagCounts, transitionCounts, emissionCounts, A, B]
 
-learn_params(load_annotated_corpus('en-ud-dev.upos.tsv'))
+
 def baseline_tag_sentence(sentence, perWordTagCounts, allTagCounts):
     """Returns a list of pairs (w,t) where each w corresponds to a word
     (same index) in the input sentence. Each word is tagged by the tag most
@@ -254,8 +254,14 @@ def baseline_tag_sentence(sentence, perWordTagCounts, allTagCounts):
         Return:
         list: list of pairs
     """
-
-    # TODO complete the code
+    tagged_sentence = []
+    for word in sentence:
+        word_tag_counts = perWordTagCounts.get(word, None)
+        if word_tag_counts:
+            best_tag = word_tag_counts.most_common(1)[0][0]
+        else:
+            best_tag = random.choices(list(allTagCounts.keys()), weights=list(allTagCounts.values()), k=1)[0]
+        tagged_sentence.append((word, best_tag))
 
     return tagged_sentence
 
