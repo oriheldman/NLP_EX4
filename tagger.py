@@ -6,9 +6,10 @@ to predict the part of speech sequence for a given sentence.
 (Adapted from Nathan Schneider)
 
 """
-
+import re
 import torch
 import torch.nn as nn
+from nltk.tokenize import word_tokenize
 from torchtext import data
 import torch.optim as optim
 from math import log, isfinite
@@ -16,6 +17,7 @@ from collections import Counter
 import numpy as np
 import sys, os, time, platform, nltk, random
 import string
+from nltk.corpus import stopwords
 
 # With this line you don't need to worry about the HW  -- GPU or CPU
 # GPU cuda cores will be used if available
@@ -69,6 +71,7 @@ def load_annotated_corpus(filename):
 START = "<DUMMY_START_TAG>"
 END = "<DUMMY_END_TAG>"
 UNK = "<UNKNOWN>"
+stop_words = set(stopwords.words('english'))
 
 suffix_list = ['ation', 'ible', 'ious', 'ment', 'ness', 'sion', 'ship', 'able', 'less', 'ward', 'wise', 'eer', 'cian',
                'able', 'ion', 'ies', 'ity', 'off', 'ous', 'ive', 'ant', 'ary', 'ful', 'ing', 'ize', 'ise', 'est', 'ess',
@@ -265,6 +268,10 @@ def baseline_tag_sentence(sentence, perWordTagCounts, allTagCounts):
 
     return tagged_sentence
 
+
+params = learn_params(load_annotated_corpus('en-ud-dev.upos.tsv'))
+test = "You are such a good boy!"
+tagged = baseline_tag_sentence(word_tokenize(test), params[1], params[0])
 
 # ===========================================
 #       POS tagging with HMM
@@ -550,3 +557,37 @@ def count_correct(gold_sentence, pred_sentence):
     # TODO complete the code
 
     return correct, correctOOV, OOV
+
+
+def normalize_text(text):
+    """
+    This function takes as input a text on which several
+    NLTK algorithms will be applied in order to preprocess it
+    """
+    pattern = r'''(?x)          # set flag to allow verbose regexps
+           (?:[A-Z]\.)+          # abbreviations, e.g. U.S.A.
+           | \w+(?:-\w+)*        # words with optional internal hyphens
+           | \$?\d+(?:\.\d+)?%?  # currency and percentages, e.g. $12.40, 82%
+           | \.\.\.              # ellipsis
+           | [][.,;"'?():_`-]    # these are separate tokens; includes ], [
+           '''
+    text = text.lower().translate(string.punctuation)
+    regexp = re.compile(pattern)
+    tokens = regexp.findall(text)
+    tokens = [word for word in tokens if word not in stop_words]
+    return " ".join(tokens)
+
+
+def remove_web_links(token):
+    token = re.sub('http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+#]|[!*\(\),]|' \
+                   '(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', token)
+    return token
+
+
+def tokenize(text):
+    tokens = nltk.word_tokenize(text)
+    stems = []
+    for item in tokens:
+        if item not in stop_words:
+            stems.append(item)
+    return stems
