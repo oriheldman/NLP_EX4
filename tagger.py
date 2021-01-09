@@ -18,6 +18,7 @@ import numpy as np
 import sys, os, time, platform, nltk, random
 import string
 from nltk.corpus import stopwords
+import pandas as pd
 
 # With this line you don't need to worry about the HW  -- GPU or CPU
 # GPU cuda cores will be used if available
@@ -269,10 +270,6 @@ def baseline_tag_sentence(sentence, perWordTagCounts, allTagCounts):
     return tagged_sentence
 
 
-params = learn_params(load_annotated_corpus('en-ud-dev.upos.tsv'))
-test = "You are such a good boy!"
-tagged = baseline_tag_sentence(word_tokenize(test), params[1], params[0])
-
 # ===========================================
 #       POS tagging with HMM
 # ===========================================
@@ -292,9 +289,55 @@ def hmm_tag_sentence(sentence, A, B):
         list: list of pairs
     """
 
-    # TODO complete the code
-
+    tags = viterbi(sentence, A, B)
+    tagged_sentence = []
+    for index, word in enumerate(sentence):
+        tagged_sentence.append([word, tags[index]])
     return tagged_sentence
+
+
+def get_tags_list(allTagCounts):
+    return list(set(allTagCounts.keys()).difference(set([END, START])))
+
+
+def get_value_from_B(B, current_tag, word, prev_tag):
+    """
+        wrapper the access to B, if the emission is known from training then return value from B,
+        else calc the emission online
+    :param B: matrix B
+    :param current_tag:
+    :param word:
+    :param prev_tag:
+    :return: log emission prob
+    """
+    if (current_tag, word) in B:
+        return B[(current_tag, word)]
+    return get_value_from_emmission(0, current_tag, word, prev_tag)
+
+
+def get_value_from_A(A, previous_tag, current_tag):
+    """
+        wrapper the access to A, if the transition is known from training then return value from A,
+        else calc the transition online
+    :param A: matrix A
+    :param previous_tag:
+    :param current_tag:
+    :return: log transition prob
+    """
+    if (previous_tag, current_tag) in A:
+        return A[(previous_tag, current_tag)]
+    else:
+        return get_value_from_transition(0, previous_tag, current_tag)
+
+
+def get_most_probable_path(viterbi, A, B, prev_word, word, current_tag):
+    possible_tags_prob = {}
+    all_possible_previous_states = viterbi[viterbi[prev_word] != 0]
+    for previous_tag, row in all_possible_previous_states.iterrows():
+        possible_tags_prob[previous_tag] = row[prev_word][-1] + get_value_from_A(A, previous_tag, current_tag) + \
+                                           get_value_from_B(B, current_tag, word, previous_tag)
+    value = max(possible_tags_prob.items(), key=lambda k: k[1])
+    return value
 
 
 def viterbi(sentence, A, B):
@@ -323,9 +366,52 @@ def viterbi(sentence, A, B):
     #         current list = [ the dummy item ]
     # Hint 3: end the sequence with a dummy: the highest-scoring item with the tag END
 
-    # TODO complete the code
+    number_of_rows = len(get_tags_list(allTagCounts))
+    number_of_columns = len(sentence)
+    data = [[0 for i in range(number_of_columns)] for j in range(number_of_rows)]
+    viterbi = pd.DataFrame(data, index=[k for k in get_tags_list(allTagCounts)],
+                           columns=[word + "_{}".format(index) for index, word in enumerate(sentence)], dtype=object)
+    # initialization step
+    intialize_states = get_tags_list(allTagCounts)
+    first_word = sentence[0]
+    if first_word in perWordTagCounts:
+        intialize_states = perWordTagCounts[first_word].keys()
 
-    return v_last
+    for state in intialize_states:
+        backpointer = START
+        prob = get_value_from_B(B, state, first_word, START) + get_value_from_A(A, START, state)
+        viterbi.loc[state, sentence[0] + "_{}".format(0)] = (state, backpointer, prob)
+    # recursion step
+    for index, word in enumerate(sentence[1:]):
+        possible_states = get_tags_list(allTagCounts)
+        if word in perWordTagCounts:
+            possible_states = perWordTagCounts[word].keys()
+
+        for state in possible_states:
+            backpointer, prob = get_most_probable_path(viterbi, A, B, sentence[index] + "_{}".format(index), word,
+                                                       state)
+            viterbi.loc[state, word + "_{}".format(index + 1)] = (state, backpointer, prob)
+    word = sentence[-1]
+    word_index = len(sentence) - 1
+    current_tag = END
+    possible_tags_prob = {}
+    all_possible_previous_states = viterbi[viterbi[word + "_{}".format(word_index)] != 0]
+    for previous_tag, row in all_possible_previous_states.iterrows():
+        possible_tags_prob[previous_tag] = row[word + "_{}".format(word_index)][-1] + \
+                                           get_value_from_A(A, previous_tag, current_tag)
+    backpointer, prob = max(possible_tags_prob.items(), key=lambda k: k[1])
+
+    tags = []
+    tags.append(END)
+    for index, word in enumerate(reversed(viterbi.columns)):
+        tags.append(backpointer)
+        # tags.append((words_in_reversed_order[index], backpointer))
+        word_possible_tags = viterbi[word]
+        backpointer = word_possible_tags[backpointer][1]
+    tags.reverse()
+    return tags
+
+    # return v_last
 
 
 # a suggestion for a helper function. Not an API requirement
@@ -357,8 +443,15 @@ def joint_prob(sentence, A, B):
 
     assert isfinite(p) and p < 0  # Should be negative. Think why!
     return p
-
-
+corpus = load_annotated_corpus('en-ud-dev.upos.tsv')
+params = learn_params()
+test = "You are such a good boy!"
+A = params[4]
+B = params[5]
+tagged_base = baseline_tag_sentence(word_tokenize(test), params[1], params[0])
+tagged_hmm = hmm_tag_sentence(word_tokenize(test), A, B)
+print(tagged_base)
+print(tagged_hmm)
 # ===========================================
 #       POS tagging with BiLSTM
 # ===========================================
