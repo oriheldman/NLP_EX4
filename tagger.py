@@ -439,20 +439,18 @@ def joint_prob(sentence, A, B):
          B (dict): tthe HMM emmission probabilities.
      """
     p = 0  # joint log prob. of words and tags
-
-    # TODO complete the code
-
+    previous_tag = START
+    for pair in sentence:
+        word = pair[0]
+        tag = pair[1]
+        p += get_value_from_B(B, tag, word, previous_tag) + get_value_from_A(A, previous_tag, tag)
+        previous_tag = tag
+    tag = END
+    p += get_value_from_A(A, previous_tag, tag)
     assert isfinite(p) and p < 0  # Should be negative. Think why!
     return p
-corpus = load_annotated_corpus('en-ud-dev.upos.tsv')
-params = learn_params()
-test = "You are such a good boy!"
-A = params[4]
-B = params[5]
-tagged_base = baseline_tag_sentence(word_tokenize(test), params[1], params[0])
-tagged_hmm = hmm_tag_sentence(word_tokenize(test), A, B)
-print(tagged_base)
-print(tagged_hmm)
+
+
 # ===========================================
 #       POS tagging with BiLSTM
 # ===========================================
@@ -667,6 +665,32 @@ def evaluate(model, iterator, criterion, tag_pad_idx):  # todo: change this sinc
     return epoch_loss / len(iterator), epoch_acc / len(iterator)
 
 
+def evaluate_hmm(model, test_data):
+    epoch_loss = 0
+    epoch_acc = 0
+
+    A = model[4]
+    B = model[5]
+
+    for test_samp in test_data:
+        text = test_samp.text
+        tags = test_samp.tags
+
+        predictions = hmm_tag_sentence(text, A, B)
+        golden = [(w, t) for w, t in zip(text, tags)]
+        correct, correctOOV, OOV = count_correct(golden, predictions)
+        pred_tags = [pair[1] for pair in predictions]
+        acc = correct / len(pred_tags)
+        epoch_acc += acc
+
+    return epoch_acc / len(test_data)
+
+
+def test_hmm(model, dataset, fields=None, saved_path=None):
+    test_acc = evaluate_hmm(model, dataset)
+    print(f'Test Acc: {test_acc * 100:.2f}%')
+
+
 def test_rnn(model, dataset, fields=None, saved_path=None):
     """Trains the BiLSTM model on the specified data.
 
@@ -789,8 +813,21 @@ def count_correct(gold_sentence, pred_sentence):
 
     """
     assert len(gold_sentence) == len(pred_sentence)
-
-    # TODO complete the code
+    correct = 0
+    correctOOV = 0
+    OOV = 0
+    for index, pair in enumerate(pred_sentence):
+        word = pair[0]
+        predicted_tag = pair[1]
+        label_tag = gold_sentence[index][1]
+        # correct prediction
+        if predicted_tag == label_tag:
+            correct += 1
+        #  oov count
+        if word not in perWordTagCounts:
+            OOV += 1
+        if predicted_tag == label_tag and word not in perWordTagCounts:
+            correctOOV += 1
 
     return correct, correctOOV, OOV
 
@@ -852,36 +889,49 @@ if __name__ == "__main__":
     fields = [('text', TEXT), ('tags', TAGS)]
     train_examples = get_examples_from_data(train_data_fn, fields)
     train_data = data.Dataset(train_examples, fields)
-    vectors = load_pretrained_embeddings(pretrained_embeddings_fn)
+    # vectors = load_pretrained_embeddings(pretrained_embeddings_fn)
 
-    TEXT.build_vocab(train_data, min_freq=2, vectors=vectors, unk_init=torch.Tensor.normal_)
-    TAGS.build_vocab(train_data)
+    # TEXT.build_vocab(train_data, min_freq=2, vectors=vectors, unk_init=torch.Tensor.normal_)
+    # TAGS.build_vocab(train_data)
 
-    params_d = {
-        'input_dimension': len(TEXT.vocab),
-        'embedding_dimension': 100,
-        'num_of_layers': 2,
-        'output_dimension': len(TAGS.vocab),
-    }
+    # params_d = {
+    #     'input_dimension': len(TEXT.vocab),
+    #     'embedding_dimension': 100,
+    #     'num_of_layers': 2,
+    #     'output_dimension': len(TAGS.vocab),
+    # }
 
     # TRAIN MODEL
-    model = initialize_rnn_model(params_d)
+    # model = initialize_rnn_model(params_d)
     # train_rnn(model, data_fn, pretrained_embeddings_fn, train_dataset=train_data, fields=[TEXT, TAGS])
 
+    # TRAIN HMM MODEL
+    corpus = load_annotated_corpus('en-ud-train.upos.tsv')
+    hmm_model = learn_params(corpus)
+    test = "You are such a good boy!"
+    A = hmm_model[4]
+    B = hmm_model[5]
+    tagged_base = baseline_tag_sentence(word_tokenize(test), hmm_model[1], hmm_model[0])
+    tagged_hmm = hmm_tag_sentence(word_tokenize(test), A, B)
+
     # LOAD MODEL
-    saved_path = 'model.sav'
-    model.load_state_dict(torch.load(saved_path))
+    # saved_path = 'model.sav'
+    # model.load_state_dict(torch.load(saved_path))
 
     # GET TEST PERFORMANCE
     test_data_fn = 'en-ud-dev.upos.tsv'
     test_examples = get_examples_from_data(test_data_fn, fields)
     test_data = data.Dataset(test_examples, fields)
-    test_rnn(model, test_data, [TEXT, TAGS])
+    test_hmm(hmm_model, test_data, [TEXT, TAGS])
+    # test_rnn(model, test_data, [TEXT, TAGS])
 
     # TAG A SENTENCE
     # sentence = ['[', 'this', 'killing', 'of', 'a', 'respected', 'cleric', 'will', 'be', 'causing', 'us',
     #             'trouble', 'for', 'years', 'to', 'come', '.', ']']
     # for tag in rnn_tag_sentence(sentence, model):
     #     print(tag)
+
+    # print(tagged_base)
+    # print(tagged_hmm)
 
     print('\ndone')
