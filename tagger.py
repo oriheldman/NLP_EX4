@@ -1,10 +1,8 @@
 """
 intro2nlp, assignment 4, 2020
-
 In this assignment you will implement a Hidden Markov model and an LSTM model
 to predict the part of speech sequence for a given sentence.
 (Adapted from Nathan Schneider)
-
 """
 import re
 import torch
@@ -155,7 +153,6 @@ def get_value_from_emmission(emmission_count, current_tag, word, prev_tag=None):
         return the emission logged prob for the given tag and word, if the word are oov then add to consideration
         word features as suffix and capital letters, I used One-Count Smoothing to smooth to prob for open groups of
         tags and closed groups of tags.
-
     :param emmission_count: number of appearances of word with tag in training set
     :param current_tag: tag to evaluate
     :param word: word to evaluate
@@ -181,11 +178,9 @@ def learn_params(tagged_sentences):
     should be computed with pseudo tags and shoud be smoothed.
     A and B should be the log-probability of the normalized counts, based on
     transisionCounts and  emmisionCounts
-
     Args:
       tagged_sentences: a list of tagged sentences, each tagged sentence is a
        list of pairs (w,t), as retunred by load_annotated_corpus().
-
    Return:
       [allTagCounts,perWordTagCounts,transitionCounts,emissionCounts,A,B] (a list)
   """
@@ -249,12 +244,10 @@ def baseline_tag_sentence(sentence, perWordTagCounts, allTagCounts):
     (same index) in the input sentence. Each word is tagged by the tag most
     frequently associated with it. OOV words are tagged by sampling from the
     distribution of all tags.
-
     Args:
         sentence (list): a list of tokens (the sentence to tag)
         perWordTagCounts (Counter): tags per word as specified in learn_params()
         allTagCounts (Counter): tag counts, as specified in learn_params()
-
         Return:
         list: list of pairs
     """
@@ -284,12 +277,10 @@ def hmm_tag_sentence(sentence, A, B):
     """Returns a list of pairs (w,t) where each w corresponds to a word
     (same index) in the input sentence. Tagging is done with the Viterby
     algorithm.
-
     Args:
         sentence (list): a list of tokens (the sentence to tag)
         A (dict): The HMM Transition probabilities
         B (dict): tthe HMM emmission probabilities.
-
     Return:
         list: list of pairs
     """
@@ -305,18 +296,14 @@ def viterbi(sentence, A, B):
     t is the tag being scored at the current position,
     r is a reference to the corresponding best item from the previous position,
     and p is a log probabilityof the sequence so far).
-
     The function returns the END item, from which it is possible to
     trace back to the beginning of the sentence.
-
     Args:
         sentence (list): a list of tokens (the sentence to tag)
         A (dict): The HMM Transition probabilities
         B (dict): tthe HMM emmission probabilities.
-
     Return:
         obj: the last item, tagged with END. should allow backtraking.
-
         """
     # Hint 1: For efficiency reasons - for words seen in training there is no
     #      need to consider all tags in the tagset, but only tags seen with that
@@ -347,7 +334,6 @@ def predict_next_best(word, tag, predecessor_list):
 def joint_prob(sentence, A, B):
     """Returns the joint probability of the given sequence of words and tags under
      the HMM model.
-
      Args:
          sentence (pair): a sequence of pairs (w,t) to compute.
          A (dict): The HMM Transition probabilities
@@ -387,7 +373,6 @@ def joint_prob(sentence, A, B):
 
 def initialize_rnn_model(params_d):
     """Returns an lstm model based on the specified parameters.
-
     Args:
         params_d (dict): an dictionary of parameters specifying the model. The dict
                         should include (at least) the following keys:
@@ -410,10 +395,8 @@ def initialize_rnn_model(params_d):
 def get_model_params(model):
     """Returns a dictionary specifying the parameters of the specified model.
     This dictionary should be used to create another instance of the model.
-
     Args:
         model (torch.nn.Module): the network architecture
-
     Return:
         a dictionary, containing at least the following keys:
         {'input_dimension': int,
@@ -445,7 +428,6 @@ def load_pretrained_embeddings(path):
 def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train_dataset=None, fields=None,
               epochs=10, batch_size=128):
     """Trains the BiLSTM model on the specified data.
-
     Args:
         model (torch.nn.Module): the model to train
         train_data_fn (string): full path to the file with training data (in the provided format)
@@ -464,7 +446,7 @@ def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train
     if train_dataset is None:
         pass  # todo: load data and fields here!
 
-    TEXT, TAGS = fields
+    TEXT, TAGS = fields[0][1], fields[1][1]
     PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
     iterator = data.BucketIterator(train_dataset, batch_size=batch_size, device=device)
@@ -475,18 +457,19 @@ def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train
     model.embedding.weight.data.copy_(vectors)
     model.embedding.weight.data[PAD_IDX] = torch.zeros(vectors.shape[1])
 
-    optimizer = optim.Adam(model.parameters())
+    # optimizer = optim.Adam(model.parameters())
+    optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad])
 
     TAG_PAD_IDX = TAGS.vocab.stoi[TAGS.pad_token]
     criterion = nn.CrossEntropyLoss(ignore_index=TAG_PAD_IDX)
 
     model = model.to(device)
     criterion = criterion.to(device)
-    
+
     for epoch in range(epochs):
         start_time = time.time()
 
-        loss, acc = train(model, iterator, optimizer, criterion, TAG_PAD_IDX)
+        loss, acc = train_ep(model, iterator, optimizer, criterion, TAG_PAD_IDX, input_rep=input_rep)
         # valid_loss, valid_acc = evaluate(model, valid_iterator, criterion, TAG_PAD_IDX)
 
         ep_time = int(time.time() - start_time)
@@ -495,49 +478,53 @@ def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train
     torch.save(model.state_dict(), 'model.sav')
 
 
-def init_weights(m):  # todo: change this since it came from ref
-    for name, param in m.named_parameters():
-        nn.init.normal_(param.data, mean=0, std=0.1)
+def init_weights(model):  # todo: change this since it came from ref
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            nn.init.normal_(param.data, mean=0, std=0.1)
 
 
 def categorical_accuracy(preds, y, tag_pad_idx):  # todo: change this since it came from ref
     """
     Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
     """
-    max_preds = preds.argmax(dim=1, keepdim=True)  # get the index of the max probability
-    non_pad_elements = (y != tag_pad_idx).nonzero()
+    max_preds = preds.argmax(dim=1, keepdim=True)
+    non_pad_elements = (y != tag_pad_idx)
     correct = max_preds[non_pad_elements].squeeze(1).eq(y[non_pad_elements])
     return correct.sum() / torch.FloatTensor([y[non_pad_elements].shape[0]])
 
 
-def train(model, iterator, optimizer, criterion, tag_pad_idx):  # todo: change this since it came from ref
+def train_ep(model, iterator, optimizer, criterion, tag_pad_idx, input_rep=0):  # todo: change this since it came from ref
     epoch_loss = 0
     epoch_acc = 0
 
     model.train()
 
     for batch in iterator:
-        text = batch.text
-        tags = batch.tags
+        if input_rep == 0:
+            x = batch.text
+        else:
+            x = [batch.text, batch.case]
+        y = batch.tags
 
         optimizer.zero_grad()
 
         # text = [sent len, batch size]
 
-        predictions = model(text)
+        predictions = model(x)
 
         # predictions = [sent len, batch size, output dim]
         # tags = [sent len, batch size]
 
         predictions = predictions.view(-1, predictions.shape[-1])
-        tags = tags.view(-1)
+        y = y.view(-1)
 
         # predictions = [sent len * batch size, output dim]
         # tags = [sent len * batch size]
 
-        loss = criterion(predictions, tags)
+        loss = criterion(predictions, y)
 
-        acc = categorical_accuracy(predictions, tags, tag_pad_idx)
+        acc = categorical_accuracy(predictions, y, tag_pad_idx)
 
         loss.backward()
 
@@ -557,17 +544,23 @@ def evaluate(model, iterator, criterion, tag_pad_idx):  # todo: change this sinc
 
     with torch.no_grad():
         for batch in iterator:
-            text = batch.text
-            tags = batch.tags
+            # text = batch.text
+            # tags = batch.tags
 
-            predictions = model(text)
+            if input_rep == 0:
+                x = batch.text
+            else:
+                x = [batch.text, batch.case]
+            y = batch.tags
+
+            predictions = model(x)
 
             predictions = predictions.view(-1, predictions.shape[-1])
-            tags = tags.view(-1)
+            y = y.view(-1)
 
-            loss = criterion(predictions, tags)
+            loss = criterion(predictions, y)
 
-            acc = categorical_accuracy(predictions, tags, tag_pad_idx)
+            acc = categorical_accuracy(predictions, y, tag_pad_idx)
 
             epoch_loss += loss.item()
             epoch_acc += acc.item()
@@ -577,7 +570,6 @@ def evaluate(model, iterator, criterion, tag_pad_idx):  # todo: change this sinc
 
 def test_rnn(model, dataset, fields=None, saved_path=None):
     """Trains the BiLSTM model on the specified data.
-
     Args:
         model (torch.nn.Module): the model to train
         train_data_fn (string): full path to the file with training data (in the provided format)
@@ -602,13 +594,11 @@ def rnn_tag_sentence(sentence, model, input_rep=0):
     """ Returns a list of pairs (w,t) where each w corresponds to a word
         (same index) in the input sentence. Tagging is done with the Viterby
         algorithm.
-
     Args:
         sentence (list): a list of tokens (the sentence to tag)
         model (torch.nn.Module):  a trained BiLSTM model
         input_rep (int): sets the input representation. Defaults to 0 (vanilla),
                          1: case-base; <other int>: other models, if you are playful
-
     Return:
         list: list of pairs
     """
@@ -644,13 +634,11 @@ def get_best_performing_model_params():
 def tag_sentence(sentence, model):
     """Returns a list of pairs (w,t) where pair corresponds to a word (same index) in
     the input sentence. Tagging is done with the specified model.
-
     Args:
         sentence (list): a list of tokens (the sentence to tag)
         model (dict): a dictionary where key is the model name and the value is
         an ordered list of the parameters of the trained model (baseline, HMM)
         or the model isteld and the input_rep flag (LSTMs).
-
         Models that must be supported (you can add more):
         1. baseline: {'baseline': [perWordTagCounts, allTagCounts]}
         2. HMM: {'hmm': [A,B]}
@@ -658,20 +646,15 @@ def tag_sentence(sentence, model):
         4. BiLSTM+case: {'cblstm': [Torch.nn.Module, input_rep]}
         5. (NOT REQUIRED: you can add other variations, agumenting the input
             with further subword information, with character-level word embedding etc.)
-
         The parameters for the baseline model are:
         perWordTagCounts (Counter): tags per word as specified in learn_params()
         allTagCounts (Counter): tag counts, as specified in learn_params()
-
         The parameters for the HMM are:
         A (dict): The HMM Transition probabilities
         B (dict): tthe HMM emmission probabilities.
-
         Parameters for an LSTM:
         the neural network model
         input_rep (int) - must support 0 and 1 (vanilla and case-base, respectively)
-
-
     Return:
         list: list of pairs
     """
@@ -690,11 +673,9 @@ def count_correct(gold_sentence, pred_sentence):
     """Return the total number of correctly predicted tags,the total number of
     correcttly predicted tags for oov words and the number of oov words in the
     given sentence.
-
     Args:
         gold_sentence (list): list of pairs, assume to be gold labels
         pred_sentence (list): list of pairs, tags are predicted by tagger
-
     """
     assert len(gold_sentence) == len(pred_sentence)
 
@@ -740,24 +721,47 @@ def tokenize(text):
 def get_examples_from_data(data_fn, fields):
     examples = []
     texts = load_annotated_corpus(data_fn)
+    case_based = len(fields) == 3
     for text in texts:
-        values = [[], []]
+        values = [[] for _ in fields]
         for token, tag in text:
             values[0].append(token)
             values[1].append(tag)
+            if case_based:
+                values[2].append(get_case_vec(token))
         example = data.Example.fromlist(values, fields)
         examples.append(example)
     return examples
 
 
+def get_case_vec(token):
+    token = str(token)
+    if token.isalpha():
+        if token.isupper():
+            return 1
+        if token[0].isupper():
+            return 2
+        if token.islower():
+            return 3
+    return 0
+
+
 if __name__ == "__main__":
+
+    # input_rep = 0
+    input_rep = 1
+
     train_data_fn = 'en-ud-train.upos.tsv'
-    # data_fn = 'train_small.tsv'
+    # train_data_fn = 'train_small.tsv'
     pretrained_embeddings_fn = 'glove.6B.100d.txt'
     # pretrained_embeddings_fn = 'some_vectors.txt'
 
     TEXT, TAGS = data.Field(lower=True), data.Field(unk_token=None)
     fields = [('text', TEXT), ('tags', TAGS)]
+    if input_rep == 1:
+        CASE = data.Field(use_vocab=False, sequential=True, pad_token=0)
+        fields.append(('case', CASE))
+
     train_examples = get_examples_from_data(train_data_fn, fields)
     train_data = data.Dataset(train_examples, fields)
     vectors = load_pretrained_embeddings(pretrained_embeddings_fn)
@@ -765,16 +769,19 @@ if __name__ == "__main__":
     TEXT.build_vocab(train_data, min_freq=2, vectors=vectors, unk_init=torch.Tensor.normal_)
     TAGS.build_vocab(train_data)
 
+
     params_d = {
         'input_dimension': len(TEXT.vocab),
         'embedding_dimension': 100,
         'num_of_layers': 2,
         'output_dimension': len(TAGS.vocab),
+        'input_rep': input_rep
     }
 
     # TRAIN MODEL
     model = initialize_rnn_model(params_d)
-    # train_rnn(model, data_fn, pretrained_embeddings_fn, train_dataset=train_data, fields=[TEXT, TAGS])
+    # train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=input_rep,
+    #           train_dataset=train_data, fields=fields)
 
     # LOAD MODEL
     saved_path = 'model.sav'
