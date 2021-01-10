@@ -386,7 +386,6 @@ def initialize_rnn_model(params_d):
     Return:
         torch.nn.Module object
     """
-
     # TODO update the padding index
     model = RNN(**params_d)
     return model
@@ -425,7 +424,7 @@ def load_pretrained_embeddings(path):
     return vocab.Vectors(name=path)
 
 
-def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train_dataset=None, fields=None,
+def train_rnn(model: RNN, train_data_fn, pretrained_embeddings_fn, input_rep=0, train_dataset=None,
               epochs=10, batch_size=128):
     """Trains the BiLSTM model on the specified data.
     Args:
@@ -444,150 +443,47 @@ def train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=0, train
     #    the required API)
 
     if train_dataset is None:
-        pass  # todo: load data and fields here!
+        field_text, field_tags = data.Field(lower=True), data.Field(unk_token=None)
+        fields = [('text', field_text), ('tags', field_tags)]
+        if input_rep == 1:
+            CASE = data.Field(use_vocab=False, sequential=True, pad_token=0)
+            fields.append(('case', CASE))
 
-    TEXT, TAGS = fields[0][1], fields[1][1]
-    PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
+        train_examples = get_examples_from_data(train_data_fn, fields)
+        train_dataset = data.Dataset(train_examples, fields)
+        vectors = load_pretrained_embeddings(pretrained_embeddings_fn)
 
-    iterator = data.BucketIterator(train_dataset, batch_size=batch_size, device=device)
+        field_text.build_vocab(train_dataset, min_freq=2, vectors=vectors, unk_init=torch.Tensor.normal_)
+        field_tags.build_vocab(train_dataset)
 
-    model.apply(init_weights)
+    field_text, field_tags = train_dataset.fields['text'], train_dataset.fields['tags']
+    padding_idx = field_text.vocab.stoi[field_text.pad_token]
+    padding_tag_idx = field_tags.vocab.stoi[field_tags.pad_token]
 
-    vectors = TEXT.vocab.vectors
-    model.embedding.weight.data.copy_(vectors)
-    model.embedding.weight.data[PAD_IDX] = torch.zeros(vectors.shape[1])
-
-    # optimizer = optim.Adam(model.parameters())
-    optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad])
-
-    TAG_PAD_IDX = TAGS.vocab.stoi[TAGS.pad_token]
-    criterion = nn.CrossEntropyLoss(ignore_index=TAG_PAD_IDX)
-
+    model.init_weights(field_text.vocab.vectors, padding_idx)
+    criterion = nn.CrossEntropyLoss(ignore_index=padding_tag_idx)
     model = model.to(device)
     criterion = criterion.to(device)
+    iterator = data.BucketIterator(train_dataset, batch_size=batch_size, device=device)
+    model.fit(iterator, criterion, epochs, padding_tag_idx)
 
-    for epoch in range(epochs):
-        start_time = time.time()
-
-        loss, acc = train_ep(model, iterator, optimizer, criterion, TAG_PAD_IDX, input_rep=input_rep)
-        # valid_loss, valid_acc = evaluate(model, valid_iterator, criterion, TAG_PAD_IDX)
-
-        ep_time = int(time.time() - start_time)
-        print(f'epoch:{epoch + 1} time:{ep_time}(secs) loss:{loss:.4f} acc:{acc:.2f}')
-
-    torch.save(model.state_dict(), 'model.sav')
+    torch.save(model.state_dict(), f'model_input_rep_{input_rep}.sav')
 
 
-def init_weights(model):  # todo: change this since it came from ref
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            nn.init.normal_(param.data, mean=0, std=0.1)
-
-
-def categorical_accuracy(preds, y, tag_pad_idx):  # todo: change this since it came from ref
+def test_rnn(model: RNN, dataset):
     """
-    Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
-    """
-    max_preds = preds.argmax(dim=1, keepdim=True)
-    non_pad_elements = (y != tag_pad_idx)
-    correct = max_preds[non_pad_elements].squeeze(1).eq(y[non_pad_elements])
-    return correct.sum() / torch.FloatTensor([y[non_pad_elements].shape[0]])
-
-
-def train_ep(model, iterator, optimizer, criterion, tag_pad_idx, input_rep=0):  # todo: change this since it came from ref
-    epoch_loss = 0
-    epoch_acc = 0
-
-    model.train()
-
-    for batch in iterator:
-        if input_rep == 0:
-            x = batch.text
-        else:
-            x = [batch.text, batch.case]
-        y = batch.tags
-
-        optimizer.zero_grad()
-
-        # text = [sent len, batch size]
-
-        predictions = model(x)
-
-        # predictions = [sent len, batch size, output dim]
-        # tags = [sent len, batch size]
-
-        predictions = predictions.view(-1, predictions.shape[-1])
-        y = y.view(-1)
-
-        # predictions = [sent len * batch size, output dim]
-        # tags = [sent len * batch size]
-
-        loss = criterion(predictions, y)
-
-        acc = categorical_accuracy(predictions, y, tag_pad_idx)
-
-        loss.backward()
-
-        optimizer.step()
-
-        epoch_loss += loss.item()
-        epoch_acc += acc.item()
-
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
-def evaluate(model, iterator, criterion, tag_pad_idx):  # todo: change this since it came from ref
-    epoch_loss = 0
-    epoch_acc = 0
-
-    model.eval()
-
-    with torch.no_grad():
-        for batch in iterator:
-            # text = batch.text
-            # tags = batch.tags
-
-            if input_rep == 0:
-                x = batch.text
-            else:
-                x = [batch.text, batch.case]
-            y = batch.tags
-
-            predictions = model(x)
-
-            predictions = predictions.view(-1, predictions.shape[-1])
-            y = y.view(-1)
-
-            loss = criterion(predictions, y)
-
-            acc = categorical_accuracy(predictions, y, tag_pad_idx)
-
-            epoch_loss += loss.item()
-            epoch_acc += acc.item()
-
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
-def test_rnn(model, dataset, fields=None, saved_path=None):
-    """Trains the BiLSTM model on the specified data.
+    Test the model.
     Args:
-        model (torch.nn.Module): the model to train
-        train_data_fn (string): full path to the file with training data (in the provided format)
-        pretrained_embeddings_fn (string): full path to the file with pretrained embeddings
-        input_rep (int): sets the input representation. Defaults to 0 (vanilla),
-                         1: case-base; <other int>: other models, if you are playful
+        model: to test
+        dataset: to test on
     """
     iterator = data.BucketIterator(dataset, batch_size=128, device=device)
-    TAG_PAD_IDX = TAGS.vocab.stoi[TAGS.pad_token]
-    criterion = nn.CrossEntropyLoss(ignore_index=TAG_PAD_IDX)
+    padding_tag_idx = TAGS.vocab.stoi[TAGS.pad_token]
+    criterion = nn.CrossEntropyLoss(ignore_index=padding_tag_idx)
     model = model.to(device)
     criterion = criterion.to(device)
-
-    # if saved_path:
-    #     model.load_state_dict(torch.load(saved_path))
-
-    test_loss, test_acc = evaluate(model, iterator, criterion, TAG_PAD_IDX)
-    print(f'Test Loss: {test_loss:.3f} |  Test Acc: {test_acc * 100:.2f}%')
+    loss, acc = model.evaluate(iterator, criterion, padding_tag_idx)
+    print(f'loss:{loss:.4f} acc:{acc:.4f}')
 
 
 def rnn_tag_sentence(sentence, model, input_rep=0):
@@ -602,13 +498,17 @@ def rnn_tag_sentence(sentence, model, input_rep=0):
     Return:
         list: list of pairs
     """
-    if TEXT.lower:
-        sentence = [token.lower() for token in sentence]
-    sentence_idxs = [TEXT.vocab.stoi[token] for token in sentence]
-    sentence_tensor = torch.LongTensor(sentence_idxs).unsqueeze(-1).to(device)
+    x_embeddings = [TEXT.vocab.stoi[token.lower()] for token in sentence]
+    x_embeddings = torch.LongTensor(x_embeddings).unsqueeze(-1).to(device)
+    if input_rep == 0:
+        x = x_embeddings
+    else:
+        x_case = [get_case_type(token) for token in sentence]
+        x_case = torch.LongTensor(x_case).unsqueeze(-1).to(device)
+        x = [x_embeddings, x_case]
 
     model.eval()
-    predictions = model(sentence_tensor)
+    predictions = model(x)
     tags = [TAGS.vocab.itos[t.item()] for t in predictions.argmax(-1)]
 
     tagged_sentence = [(w, t) for w, t in zip(sentence, tags)]
@@ -664,9 +564,9 @@ def tag_sentence(sentence, model):
     if model_name == 'hmm':
         return hmm_tag_sentence(sentence, values[0], values[1])
     if model_name == 'blstm':
-        return rnn_tag_sentence(sentence, values[0])
+        return rnn_tag_sentence(sentence, values[0], values[1])
     if model_name == 'cblstm':
-        return rnn_tag_sentence(sentence, values[0])
+        return rnn_tag_sentence(sentence, values[0], values[1])
 
 
 def count_correct(gold_sentence, pred_sentence):
@@ -719,6 +619,15 @@ def tokenize(text):
 
 
 def get_examples_from_data(data_fn, fields):
+    """
+    Build a list of Examples to make the dataset with
+    Args:
+        data_fn: path of dataset (tsv file)
+        fields (List[Tuple[str, Field]]): fields to extract from data
+
+    Returns:
+        list of torchtext.data.Example objects
+    """
     examples = []
     texts = load_annotated_corpus(data_fn)
     case_based = len(fields) == 3
@@ -728,15 +637,22 @@ def get_examples_from_data(data_fn, fields):
             values[0].append(token)
             values[1].append(tag)
             if case_based:
-                values[2].append(get_case_vec(token))
+                values[2].append(get_case_type(token))
         example = data.Example.fromlist(values, fields)
         examples.append(example)
     return examples
 
 
-def get_case_vec(token):
-    token = str(token)
-    if token.isalpha():
+def get_case_type(token):
+    """
+    Get the case type of a token
+    Args:
+        token: to analyze
+
+    Returns:
+        1 if is all uppercase, 2 if first char is uppercase, 3 if is all lowercase, 0 otherwise
+    """
+    if token.replace('.', '').isalpha():  # ignore period, for token like 'U.S.'
         if token.isupper():
             return 1
         if token[0].isupper():
@@ -748,13 +664,13 @@ def get_case_vec(token):
 
 if __name__ == "__main__":
 
-    # input_rep = 0
-    input_rep = 1
+    input_rep = 0
+    # input_rep = 1
 
-    train_data_fn = 'en-ud-train.upos.tsv'
-    # train_data_fn = 'train_small.tsv'
-    pretrained_embeddings_fn = 'glove.6B.100d.txt'
-    # pretrained_embeddings_fn = 'some_vectors.txt'
+    # train_data_fn = 'en-ud-train.upos.tsv'
+    train_data_fn = 'train_small.tsv'
+    # pretrained_embeddings_fn = 'glove.6B.100d.txt'
+    pretrained_embeddings_fn = 'some_vectors.txt'
 
     TEXT, TAGS = data.Field(lower=True), data.Field(unk_token=None)
     fields = [('text', TEXT), ('tags', TAGS)]
@@ -768,35 +684,40 @@ if __name__ == "__main__":
 
     TEXT.build_vocab(train_data, min_freq=2, vectors=vectors, unk_init=torch.Tensor.normal_)
     TAGS.build_vocab(train_data)
-
+    padding_idx = TEXT.vocab.stoi[TEXT.pad_token]
 
     params_d = {
         'input_dimension': len(TEXT.vocab),
         'embedding_dimension': 100,
         'num_of_layers': 2,
         'output_dimension': len(TAGS.vocab),
-        'input_rep': input_rep
+        'padding_idx': padding_idx,
+        'input_rep': input_rep,
     }
 
     # TRAIN MODEL
     model = initialize_rnn_model(params_d)
-    # train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=input_rep,
-    #           train_dataset=train_data, fields=fields)
+    # train_rnn(model, train_data_fn, pretrained_embeddings_fn, input_rep=input_rep, train_dataset=train_data)
 
     # LOAD MODEL
-    saved_path = 'model.sav'
+    saved_path = f'model_input_rep_{input_rep}.sav'
     model.load_state_dict(torch.load(saved_path))
 
     # GET TEST PERFORMANCE
-    test_data_fn = 'en-ud-dev.upos.tsv'
+    # test_data_fn = 'en-ud-dev.upos.tsv'
+    test_data_fn = 'test_small.tsv'
     test_examples = get_examples_from_data(test_data_fn, fields)
     test_data = data.Dataset(test_examples, fields)
-    test_rnn(model, test_data, [TEXT, TAGS])
+    test_rnn(model, test_data)
 
     # TAG A SENTENCE
-    # sentence = ['[', 'this', 'killing', 'of', 'a', 'respected', 'cleric', 'will', 'be', 'causing', 'us',
-    #             'trouble', 'for', 'years', 'to', 'come', '.', ']']
-    # for tag in rnn_tag_sentence(sentence, model):
-    #     print(tag)
+    sentence = ['This', 'is', 'the', 'U.S.', ',', 'the', 'BEST', 'country', 'of', 'America',
+                '(', 'by', 'FaR', ')', '.']
+    if input_rep == 0:
+        d = {'blstm': [model, input_rep]}
+    else:
+        d = {'cblstm': [model, input_rep]}
+    for tag in tag_sentence(sentence, d):
+        print(tag)
 
     print('\ndone')
