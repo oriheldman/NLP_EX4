@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.optim as optim
+import numpy as np
 import time
 
 
@@ -28,8 +29,8 @@ class RNN(nn.Module):
         if input_rep == 0:
             self.forward = self.forward_rep_0
         else:
-            lstm_input_dim += 3
             self.forward = self.forward_rep_1
+            lstm_input_dim += 3
             case_vectors = torch.FloatTensor([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
             self.case_embedding = nn.Embedding.from_pretrained(case_vectors, freeze=True)
         self.lstm = nn.LSTM(lstm_input_dim, hidden_dim, num_layers=num_of_layers,
@@ -80,41 +81,69 @@ class RNN(nn.Module):
         self.embedding.weight.data.copy_(embeddings)
         self.embedding.weight.data[padding_idx] = torch.zeros(embeddings.shape[1])
 
-    def fit(self, dataset_iterator, criterion, epochs, padding_tag_idx, verbose=True):
+    def fit(self, train_iterator, criterion, epochs, padding_tag_idx, val_iterator=None, save_best=True, verbose=True):
         """
         Fit the model on a dataset.
         Args:
-            dataset_iterator (torch.data.BucketIterator): data to train on
+            train_iterator (torch.data.BucketIterator): data to train on
             criterion: (torch.nn.CrossEntropyLoss): loss type
             epochs: num. of epochs to train
             padding_tag_idx: index of padding tag
+            val_iterator: data to validate in (defaults to None)
+            save_best: boolean to save the best performing model on the validation set
             verbose: to print progress (loss and acc per episode)
         """
         optimizer = optim.Adam([p for p in self.parameters() if p.requires_grad])
+        best_val_acc = 0
         for epoch in range(epochs):
             start_time = time.time()
-            self.train()
-            epoch_losses, epoch_accs = [], []
-            for batch in dataset_iterator:
-                x = batch.text if self.input_rep == 0 else [batch.text, batch.case]
-                y = batch.tags.view(-1)
-
-                optimizer.zero_grad()
-                y_pred = self(x)
-                y_pred = y_pred.view(-1, y_pred.shape[-1])
-
-                loss = criterion(y_pred, y)
-                loss.backward()
-                optimizer.step()
-
-                acc = get_acc(y_pred, y, padding_tag_idx)
-                epoch_losses.append(loss.item())
-                epoch_accs.append(acc.item())
-
+            train_loss, train_acc = self.train_epoch(train_iterator, optimizer, criterion, padding_tag_idx)
+            ep_time = int(time.time() - start_time)
+            val_str = ''
+            if val_iterator:
+                val_loss, val_acc = self.evaluate(val_iterator, criterion, padding_tag_idx)
+                best_str = ''
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_str = ' NEW BEST'
+                    if save_best:
+                        torch.save(self.state_dict(), f'model_input_rep_{self.input_rep}.sav')
+                val_str = f' val_loss:{val_loss:.4f} val_acc:{val_acc:.4f}{best_str}'
             if verbose:
-                ep_time = int(time.time() - start_time)
-                total_loss, total_acc = sum(epoch_losses) / len(epoch_losses), sum(epoch_accs) / len(epoch_accs)
-                print(f'epoch:{epoch + 1} time:{ep_time}(secs) loss:{total_loss:.4f} acc:{total_acc:.4f}')
+                print(f'epoch:{epoch + 1} time:{ep_time}(secs) loss:{train_loss:.4f} acc:{train_acc:.4f}{val_str}')
+        if not val_iterator and save_best:  # save after last epoch, if no validation set
+            torch.save(self.state_dict(), f'model_input_rep_{self.input_rep}.sav')
+
+    def train_epoch(self, train_iterator, optimizer, criterion, padding_tag_idx):
+        """
+        Perform one training epoch
+        Args:
+            train_iterator: (torch.data.BucketIterator): data to train on
+            optimizer: (torch.optim.Adam): optimizer from pytorch
+            criterion: (torch.nn.CrossEntropyLoss): loss type
+            padding_tag_idx: index of padding tag
+
+        Returns:
+
+        """
+        self.train()
+        losses, accs = [], []
+        for batch in train_iterator:
+            x = batch.text if self.input_rep == 0 else [batch.text, batch.case]
+            y = batch.tags.view(-1)
+
+            optimizer.zero_grad()
+            y_pred = self(x)
+            y_pred = y_pred.view(-1, y_pred.shape[-1])
+            acc = get_acc(y_pred, y, padding_tag_idx)
+
+            loss = criterion(y_pred, y)
+            loss.backward()
+            optimizer.step()
+            
+            losses.append(loss.item())
+            accs.append(acc.item())
+        return np.mean(losses), np.mean(accs)
 
     def evaluate(self, dataset_iterator, criterion, padding_tag_idx):
         """
@@ -142,7 +171,7 @@ class RNN(nn.Module):
                 losses.append(loss.item())
                 accs.append(acc.item())
 
-        return sum(losses) / len(losses), sum(accs) / len(accs)
+        return np.mean(losses), np.mean(accs)
 
 
 def get_acc(y_pred, y, padding_tag_idx):
@@ -160,4 +189,3 @@ def get_acc(y_pred, y, padding_tag_idx):
     y = y[not_padding]
     y_pred = y_pred.argmax(dim=1, keepdim=True)[not_padding]
     return y_pred.squeeze(1).eq(y).sum() / torch.FloatTensor([y.shape[0]])
-
