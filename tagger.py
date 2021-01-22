@@ -472,6 +472,31 @@ def tokenize(text):
     return stems
 
 
+def evaluate_hmm(model, test_data):
+    epoch_acc = 0
+
+    A = model[4]
+    B = model[5]
+
+    for test_samp in test_data:
+        text = test_samp.text
+        tags = test_samp.tags
+
+        predictions = hmm_tag_sentence(text, A, B)
+        golden = [(w, t) for w, t in zip(text, tags)]
+        correct, correctOOV, OOV = count_correct(golden, predictions)
+        pred_tags = [pair[1] for pair in predictions]
+        acc = correct / len(pred_tags)
+        epoch_acc += acc
+
+    return epoch_acc / len(test_data)
+
+
+def test_hmm(model, dataset):
+    test_acc = evaluate_hmm(model, dataset)
+    print(f'Test Acc: {test_acc * 100:.2f}%')
+
+
 # ===========================================
 #       POS tagging with BiLSTM
 # ===========================================
@@ -671,8 +696,8 @@ def rnn_tag_sentence(sentence, model):
         x = [x_embeddings, x_case]
 
     model.eval()
-    predictions = model(x)
-    tags = [field_tags.vocab.itos[t.item()] for t in predictions.argmax(-1)]
+    y_pred = model(x)
+    tags = [field_tags.vocab.itos[t.item()] for t in y_pred.argmax(-1)]
 
     tagged_sentence = [(w, t) for w, t in zip(sentence, tags)]
     return tagged_sentence
@@ -806,45 +831,80 @@ GLOBAL_VOCAB = None
 
 if __name__ == "__main__":
 
-    # input_rep = 0
-    input_rep = 1
-
+    """ JONI'S MAIN: """
+    #
+    # # input_rep = 0
+    # input_rep = 1
+    #
     # train_data_fn = 'en-ud-train.upos.tsv'
     # test_data_fn = 'en-ud-dev.upos.tsv'
     # pretrained_embeddings_fn = 'glove.6B.100d.txt'
+    #
+    # # train_data_fn = 'train_small.tsv'
+    # # test_data_fn = 'test_small.tsv'
+    # # pretrained_embeddings_fn = 'some_vectors.txt'
+    #
+    # train_texts = load_annotated_corpus(train_data_fn)
+    # test_texts = load_annotated_corpus(test_data_fn)
+    # params_d = get_best_performing_model_params()
+    # params_d['pretrained_embeddings_fn'] = pretrained_embeddings_fn
+    # params_d['data_fn'] = train_data_fn
+    # params_d['input_rep'] = input_rep
+    #
+    # # TRAIN MODEL
+    # model = initialize_rnn_model(params_d)
+    # train_rnn(model, train_texts, test_texts)
+    #
+    # # # LOAD MODEL
+    # # saved_path = f'model_input_rep_{input_rep}.sav'
+    # # model.load_state_dict(torch.load(saved_path))
+    #
+    # # GET TEST PERFORMANCE
+    # # test_rnn(model, test_data)
+    #
+    # # EVALUATE
+    # model_name = 'blstm' if input_rep == 0 else 'cblstm'
+    # d = {model_name: [model]}
+    # correct_count, word_count = 0, 0
+    # oov_correct_count, oov_count = 0, 0
+    # for gold_sentence in test_texts:
+    #     words = [w[0] for w in gold_sentence]
+    #     pred_sentence = tag_sentence(words, d)
+    #     correct, correctOOV, OOV = count_correct(gold_sentence, pred_sentence)
+    #     correct_count += correct
+    #     word_count += len(words)
+    #     oov_correct_count += correctOOV
+    #     oov_count += OOV
+    # test_acc = correct_count / word_count
+    # oov_ratio = oov_count / word_count
+    # oov_acc = oov_correct_count / oov_count
+    # print(f'\n{model_name} test_acc={test_acc:.4f} oov_ratio={oov_ratio:.4f} oov_acc={oov_acc:.4f}')
+
+    """ ORI'S MAIN: """
+
+    # train_data_fn = 'en-ud-train.upos.tsv'
+    # test_data_fn = 'en-ud-dev.upos.tsv'
 
     train_data_fn = 'train_small.tsv'
     test_data_fn = 'test_small.tsv'
-    pretrained_embeddings_fn = 'some_vectors.txt'
 
-    train_texts = load_annotated_corpus(train_data_fn)
-    test_texts = load_annotated_corpus(test_data_fn)
-    params_d = get_best_performing_model_params()
-    params_d['pretrained_embeddings_fn'] = pretrained_embeddings_fn
-    params_d['data_fn'] = train_data_fn
-    params_d['input_rep'] = input_rep
+    TEXT, TAGS = data.Field(lower=True), data.Field(unk_token=None)
+    fields = [('text', TEXT), ('tags', TAGS)]
 
-    # TRAIN MODEL
-    model = initialize_rnn_model(params_d)
-    train_rnn(model, train_texts, test_texts)
-
-    # # LOAD MODEL
-    # saved_path = f'model_input_rep_{input_rep}.sav'
-    # model.load_state_dict(torch.load(saved_path))
+    # TRAIN HMM MODEL
+    corpus = load_annotated_corpus(train_data_fn)
+    hmm_model = learn_params(corpus)
+    test = "You are such a good boy!"
+    A = hmm_model[4]
+    B = hmm_model[5]
+    tagged_base = baseline_tag_sentence(word_tokenize(test), hmm_model[1], hmm_model[0])
+    tagged_hmm = hmm_tag_sentence(word_tokenize(test), A, B)
+    print(tagged_base)
+    print(tagged_hmm)
 
     # GET TEST PERFORMANCE
-    # test_rnn(model, test_data)
-
-    # EVALUATE
-    model_name = 'blstm' if input_rep == 0 else 'cblstm'
-    d = {model_name: [model]}
-    correct_count, word_count = 0, 0
-    for gold_sentence in test_texts:
-        words = [w[0] for w in gold_sentence]
-        pred_sentence = tag_sentence(words, d)
-        correct, correctOOV, OOV = count_correct(gold_sentence, pred_sentence)
-        correct_count += correct
-        word_count += len(words)
-    print(f'\n{model_name} test acc = {correct_count / word_count:.4f}')
+    test_examples = get_examples_from_data(load_annotated_corpus(test_data_fn), fields)
+    test_data = data.Dataset(test_examples, fields)
+    test_hmm(hmm_model, test_data)
 
     print('\ndone')
